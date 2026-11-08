@@ -14,17 +14,31 @@ window.Engine = (() => {
     hard: Object.freeze({ label: '難（高年級）', min: 28, max: 32 })
   });
   // 產生器版本：演算法或難度規則有變動時加 1。題組檔會連同題目本身一起存，所以舊檔不靠重新產生也能還原。
-  const VERSION = 2, FILE_FORMAT = 1, FILE_APP = 'sudoku-maze-generator';
+  const VERSION = 3, FILE_FORMAT = 1, FILE_APP = 'sudoku-maze-generator';
   const SIZES = Object.freeze([5, 6, 7, 8, 10, 12, 15]);
-  // 迷宮三級：auto 時格數落在 min～max；bias 越高路越長越少岔路；pass 是自動驗證的指標（n 為邊長）。
-  // 指標：pathLen 正確路線格數、junctions 路線上的岔路口數、deadDepth 最深的錯路（從正確路線岔出去幾格）。
+  // 小格數依可用空間縮放假路長度，仍保留三級的大岔路數差異。
+  function forkDepth(n, forks, factor) {
+    return Math.min(Math.ceil(factor * n), Math.floor((n * n - (2 * n - 1)) / (forks + 1)));
+  }
+  function largeForks(s, depth) {
+    // 假路至少有正路到下一個選擇點的一半長，短支線不能算成大岔路。
+    return s.forks.filter(f => f.falseLength >= depth && f.falseLength >= f.forwardLength / 2).length;
+  }
+  function mazePathMin(n, forks, factor, multiple) {
+    const shortest = 2 * n - 1, spare = n * n - shortest - forks * forkDepth(n, forks, factor);
+    // 除了預留假路，還要留接枝空間；避免小盤面門檻剛好卡在不可能的路徑奇偶數。
+    return Math.min(multiple * n, shortest + Math.floor(spare / 2));
+  }
   const MAZE_LEVELS = Object.freeze({
-    easy: Object.freeze({ label: '易（低年級）', min: 5, max: 7, bias: .95, tries: 30,
-      pass: (s, n) => s.pathLen >= 1.8 * n && s.junctions >= 1 && s.junctions <= .6 * n + .5 }),
-    medium: Object.freeze({ label: '中（中年級）', min: 8, max: 11, bias: .85, tries: 60,
-      pass: (s, n) => s.pathLen >= 3 * n && s.junctions >= .8 * n && s.deadDepth >= 1.3 * n }),
-    hard: Object.freeze({ label: '難（高年級）', min: 12, max: 15, bias: .8, tries: 100,
-      pass: (s, n) => s.pathLen >= 4 * n && s.junctions >= n && s.deadDepth >= 2 * n })
+    easy: Object.freeze({ label: '易（低年級）', min: 5, max: 7, bias: .95, tries: 100, forks: 1, depth: n => forkDepth(n, 1, .7),
+      pass: (s, n) => s.pathLen >= 1.8 * n && s.junctions <= .6 * n + .5 &&
+        s.deadDepth >= forkDepth(n, 1, .7) && largeForks(s, forkDepth(n, 1, .7)) >= 1 }),
+    medium: Object.freeze({ label: '中（中年級）', min: 8, max: 11, bias: .85, tries: 160, forks: 2, depth: n => forkDepth(n, 2, 1),
+      pass: (s, n) => s.pathLen >= mazePathMin(n, 2, 1, 3) &&
+        s.deadDepth >= forkDepth(n, 2, 1) && largeForks(s, forkDepth(n, 2, 1)) >= 2 }),
+    hard: Object.freeze({ label: '難（高年級）', min: 12, max: 15, bias: .8, tries: 240, forks: 3, depth: n => forkDepth(n, 3, 1.4),
+      pass: (s, n) => s.pathLen >= mazePathMin(n, 3, 1.4, 4) &&
+        s.deadDepth >= forkDepth(n, 3, 1.4) && largeForks(s, forkDepth(n, 3, 1.4)) >= 3 })
   });
   const FULL = 0x1ff;
   const ROW = Array.from({ length: 81 }, (_, i) => Math.floor(i / 9));
@@ -242,22 +256,34 @@ window.Engine = (() => {
     for (const d of DIRS) { const q = [p[0] + d[0], p[1] + d[1]]; if (canMove(maze, p, q)) out.push(q[0] * maze.cols + q[1]); }
     return out;
   }
-  // 量難度指標：從正確路線往外數，路線上有幾個岔路口、錯路最深幾格、死路有幾條。
+  // 每個岔路記錄假路最大深度，與正路到下一個選擇點的長度比較。
   function mazeStats(maze) {
     const path = solve(maze);
     if (!path) return null;
-    const cells = maze.rows * maze.cols, depth = new Int32Array(cells).fill(-1), queue = [], onPath = new Uint8Array(cells);
-    for (const p of path) { const i = p[0] * maze.cols + p[1]; onPath[i] = 1; depth[i] = 0; queue.push(i); }
+    const cells = maze.rows * maze.cols, onPath = new Uint8Array(cells), seen = new Uint8Array(cells);
+    const indices = path.map(p => p[0] * maze.cols + p[1]), forks = [];
+    for (const i of indices) { onPath[i] = 1; seen[i] = 1; }
     let junctions = 0, deadDepth = 0, deadEnds = 0;
-    const startI = maze.start[0] * maze.cols + maze.start[1], endI = maze.end[0] * maze.cols + maze.end[1];
-    for (let h = 0; h < queue.length; h++) for (const x of neighbors(maze, queue[h])) if (depth[x] < 0) { depth[x] = depth[queue[h]] + 1; queue.push(x); }
-    for (let i = 0; i < cells; i++) {
-      const ns = neighbors(maze, i);
-      if (onPath[i] && ns.some(x => !onPath[x])) junctions++;
-      if (depth[i] > deadDepth) deadDepth = depth[i];
-      if (ns.length === 1 && i !== startI && i !== endI) deadEnds++;
+    for (let at = 0; at < indices.length; at++) {
+      let deepest = 0;
+      for (const next of neighbors(maze, indices[at])) {
+        if (seen[next]) continue;
+        const stack = [[next, 1]]; seen[next] = 1;
+        while (stack.length) {
+          const [i, depth] = stack.pop();
+          deepest = Math.max(deepest, depth);
+          for (const x of neighbors(maze, i)) if (!seen[x]) { seen[x] = 1; stack.push([x, depth + 1]); }
+        }
+      }
+      if (deepest) {
+        junctions++; deadDepth = Math.max(deadDepth, deepest);
+        // 起終點旁的支線不算途中兩選一。
+        if (at > 0 && at < indices.length - 1) forks.push({ at, falseLength: deepest, forwardLength: 0 });
+      }
     }
-    return { cells, pathLen: path.length, junctions, deadDepth, deadEnds };
+    for (let k = 0; k < forks.length; k++) forks[k].forwardLength = (k + 1 < forks.length ? forks[k + 1].at : indices.length - 1) - forks[k].at;
+    for (let i = 0; i < cells; i++) if (!onPath[i] && neighbors(maze, i).length === 1) deadEnds++;
+    return { cells, pathLen: path.length, junctions, deadDepth, deadEnds, forks };
   }
   // 完美迷宮：全部連通、沒有繞圈，所以起點到終點只有唯一一條路。
   function isPerfect(maze) {
@@ -267,7 +293,6 @@ window.Engine = (() => {
     while (stack.length) for (const x of neighbors(maze, stack.pop())) if (!seen[x]) { seen[x] = 1; reach++; stack.push(x); }
     return reach === cells && open / 2 === cells - 1;
   }
-  function mazeScore(s, n) { return (s.pathLen + 1.5 * s.junctions + s.deadDepth) / n; }
   // 成長樹法：bias 的機率接著最新的格子走（長走廊），否則從任意舊格子長出新岔路。
   function carveMaze(n, rng, bias) {
     const walls = Array(n * n).fill(15), visited = new Uint8Array(n * n), list = [0];
@@ -281,6 +306,50 @@ window.Engine = (() => {
     }
     return walls;
   }
+  // 先保留答案，再從答案中途預留長假路；只連接未使用格，保持生成樹。
+  function carveForkedMaze(n, rng, L) {
+    const base = { rows: n, cols: n, walls: carveMaze(n, rng, L.bias), start: [0, 0], end: [n - 1, n - 1] };
+    const path = solve(base).map(p => p[0] * n + p[1]);
+    const target = L.depth(n);
+    if (path.length + L.forks * target > n * n) return null;
+    const walls = Array(n * n).fill(15), used = new Uint8Array(n * n), active = [];
+    const adjacent = i => DIRS.map(d => ({ d, r: Math.floor(i / n) + d[0], c: i % n + d[1] }))
+      .filter(q => q.r >= 0 && q.r < n && q.c >= 0 && q.c < n).map(q => ({ i: q.r * n + q.c, d: q.d }));
+    function connect(a, b) {
+      const d = adjacent(a).find(q => q.i === b).d;
+      walls[a] &= ~d[2]; walls[b] &= ~d[3];
+    }
+    for (let k = 0; k < path.length; k++) {
+      used[path[k]] = 1; active.push(path[k]);
+      if (k) connect(path[k - 1], path[k]);
+    }
+    const roots = shuffle(path.slice(1, -1), rng);
+    let reserved = 0;
+    for (const root of roots) {
+      if (reserved === L.forks) break;
+      // 有界回溯找長支線；失敗不挖牆、不佔空間，換另一個岔路口。
+      const trail = [root], local = new Uint8Array(used), choices = [shuffle(adjacent(root), rng)];
+      let budget = 2 * n * n;
+      while (trail.length && trail.length <= target && budget-- > 0) {
+        const q = choices[choices.length - 1].pop();
+        if (!q) { const last = trail.pop(); choices.pop(); if (last !== root) local[last] = 0; continue; }
+        if (local[q.i]) continue;
+        local[q.i] = 1; trail.push(q.i); choices.push(shuffle(adjacent(q.i), rng));
+      }
+      if (trail.length <= target) continue;
+      for (let k = 1; k < trail.length; k++) { connect(trail[k - 1], trail[k]); used[trail[k]] = 1; active.push(trail[k]); }
+      reserved++;
+    }
+    // 剩餘格接到既有樹上，不接通兩條已存在的路線。
+    while (active.length) {
+      const k = rng() < L.bias ? active.length - 1 : Math.floor(rng() * active.length), current = active[k];
+      const choices = adjacent(current).filter(q => !used[q.i]);
+      if (!choices.length) { active.splice(k, 1); continue; }
+      const q = choices[Math.floor(rng() * choices.length)];
+      connect(current, q.i); used[q.i] = 1; active.push(q.i);
+    }
+    return walls;
+  }
   function generateMaze(settings = {}) {
     const { count, seed, rng } = options(settings);
     const level = settings.level === undefined ? 'easy' : settings.level;
@@ -291,26 +360,18 @@ window.Engine = (() => {
     const mazes = [];
     for (let k = 0; k < count; k++) {
       const n = size === 'auto' ? (count === 1 ? L.min : L.min + Math.round(k * (L.max - L.min) / (count - 1))) : size;
-      let chosen = null, fallback = null;
-      for (let round = 0; round < 5 && !chosen; round++) {
-        for (let t = 0; t < L.tries; t++) {
-          const maze = { rows: n, cols: n, walls: carveMaze(n, rng, L.bias), start: [0, 0], end: [n - 1, n - 1] };
-          const s = mazeStats(maze), score = mazeScore(s, n);
-          maze.solution = solve(maze);
-          maze.stats = Object.assign(s, { pass: L.pass(s, n) });
-          // 低年級要簡單：達標的第一個就用；中高年級在達標的裡面取最難的
-          if (maze.stats.pass) {
-            if (level === 'easy') { chosen = maze; break; }
-            if (!chosen || score > chosen.score) { maze.score = score; chosen = maze; }
-          }
-          const better = level === 'easy' ? -score : score;
-          if (!fallback || better > fallback.better) { maze.better = better; fallback = maze; }
-        }
+      let picked = null;
+      for (let t = 0; t < L.tries; t++) {
+        const walls = carveForkedMaze(n, rng, L);
+        if (!walls) continue;
+        const maze = { rows: n, cols: n, walls, start: [0, 0], end: [n - 1, n - 1] };
+        const stats = mazeStats(maze);
+        if (!L.pass(stats, n)) continue;
+        maze.solution = solve(maze);
+        maze.stats = Object.assign(stats, { pass: true });
+        picked = maze; break;
       }
-      // 格數是使用者指定、與難度不搭時，達不到指標就用最接近的；自動格數必須達標
-      const picked = chosen || (size === 'auto' ? null : fallback);
       if (!picked) throw new Error('無法產生符合難度指標的迷宮，請更換題組代碼重試。');
-      delete picked.score; delete picked.better;
       picked.no = k + 1;
       mazes.push(picked);
     }
@@ -359,7 +420,7 @@ window.Engine = (() => {
           const L = typeof set.level === 'string' && Object.hasOwn(MAZE_LEVELS, set.level) ? MAZE_LEVELS[set.level] : null, st = mazeStats(entry);
           if (!isPerfect(entry)) fail('迷宮有繞圈或有走不到的格子');
           if (!L) fail('迷宮難度不正確');
-          else if (set.size === 'auto' && (!st || !L.pass(st, entry.rows))) fail('沒有達到難度指標');
+          else if (!st || !L.pass(st, entry.rows)) fail('沒有達到難度指標');
         }
       }
       if (!errors.length) passed++;
