@@ -509,6 +509,14 @@ body[data-mode=screen] #exportView,body[data-mode=export] #screenView{display:no
 .num{font:inherit;font-size:34px;font-weight:800;height:66px;border:2px solid var(--ink);border-radius:16px;background:#fff0c4;color:var(--ink);box-shadow:0 4px 0 var(--ink);cursor:pointer;touch-action:manipulation}
 .num:active{transform:translateY(3px);box-shadow:0 1px 0 var(--ink)}
 .num.clr{grid-column:span 3;font-size:24px;height:56px;background:#ffd9de}
+.notebar{display:flex;align-items:center;gap:12px}
+.notebar .btn{flex:none;width:8.5em;height:46px;padding:0;font-size:20px;touch-action:manipulation}
+.notebar .btn[aria-pressed="true"]{background:var(--sun)}
+.noteauto{flex:1;min-width:0;display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;line-height:1.35;word-break:keep-all;cursor:pointer;touch-action:manipulation}
+.noteauto input{flex:none;width:22px;height:22px;accent-color:var(--blue);cursor:pointer}
+.numpad.noting .num:not(.clr){font-size:26px;color:#8a94a6}
+.nt{width:100%;height:100%;display:grid;grid-template-columns:repeat(3,1fr);grid-template-rows:repeat(3,1fr);pointer-events:none}
+.nt i{font-style:normal;display:flex;align-items:center;justify-content:center;font-size:calc(var(--bs) / 9 * .26);font-weight:600;color:#8a94a6;line-height:1}
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .actions .btn{width:100%;font-size:20px;padding:.5em 0}
 #msg,#mmsg{min-height:4.6em;padding:10px 14px;border-radius:16px;background:#fff;border:2px dashed #e9c98d;font-weight:700;font-size:19px}
@@ -673,6 +681,10 @@ body[data-view=q] #aPages,body[data-view=a] #qPages{display:none}
     <div id="sudokuPlay" class="play sudoku-only">
       <div class="boardwrap"><div id="board" role="grid" aria-label="數獨盤面"></div></div>
       <aside class="side">
+        <div class="notebar">
+          <button type="button" class="btn" id="btnNote" aria-pressed="false">草稿：關</button>
+          <label class="noteauto"><input type="checkbox" id="noteAuto">填入後自動移除同列、同行、同宮的草稿數字</label>
+        </div>
         <div class="numpad" id="numpad"></div>
         <div class="actions">
           <button type="button" class="btn good" id="btnCheck"><svg class="ic" aria-hidden="true"><use href="#i-check"/></svg>檢查</button>
@@ -723,7 +735,8 @@ body[data-view=q] #aPages,body[data-view=a] #qPages{display:none}
 'use strict';
 const $ = id => document.getElementById(id);
 const ST = { seeds: { sudoku: '', maze: '' }, type: 'sudoku', mode: 'screen', view: 'q', busy: false, sel: -1, lv: { sudoku: 'easy', maze: 'easy' },
-  sets: { sudoku: null, maze: null }, idx: { sudoku: 0, maze: 0 }, play: { sudoku: [], maze: [] } };
+  sets: { sudoku: null, maze: null }, idx: { sudoku: 0, maze: 0 }, play: { sudoku: [], maze: [] },
+  noteMode: false, noteAuto: false };
 const INK = '#2b3a55';
 const f2 = v => +v.toFixed(2);
 const ic = (name, cls) => `<svg class="ic${cls ? ' ' + cls : ''}" aria-hidden="true"><use href="#i-${name}"/></svg>`;
@@ -758,7 +771,7 @@ function installSet(set) {
   ST.type = type; document.body.dataset.type = type; setActive($('typeTabs'), 'type', type);
   ST.sets[type] = set; ST.idx[type] = 0; ST.sel = -1;
   ST.play[type] = type === 'sudoku'
-    ? set.puzzles.map(p => ({ grid: p.givens.slice(), wrong: [], revealed: false, done: false, hint: -1 }))
+    ? set.puzzles.map(p => ({ grid: p.givens.slice(), wrong: [], revealed: false, done: false, hint: -1, notes: new Array(81).fill(0) }))
     : set.mazes.map(() => ({ path: [], revealed: false, done: false }));
   reflectSettings(true);
 }
@@ -917,7 +930,7 @@ $('numpad').innerHTML = [1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button type="butt
   '<button type="button" class="num clr" id="btnClear" data-n="0">' + ic('erase') + '清除這格</button>';
 const sp = () => ST.sets.sudoku.puzzles[ST.idx.sudoku], ss = () => ST.play.sudoku[ST.idx.sudoku];
 function smsg(t, k) { const m = $('msg'); m.textContent = t; m.className = k || ''; }
-const DEFMSG = '點一格，再按右邊的數字（或用鍵盤）。藍色是你填的，黑色是題目給的。';
+const DEFMSG = '點一格，再按右邊的數字（或用鍵盤）。藍色是你填的，黑色是題目給的。開啟草稿模式可以先寫小字筆記。';
 
 function renderSudoku() {
   if (!ST.sets.sudoku) return;
@@ -936,6 +949,12 @@ function renderSudoku() {
     if (i === st.hint) k += ' hint';
     if (i === sel) k += ' sel';
     cells[i].className = k; cells[i].textContent = view[i] || '';
+    const nm = st.notes ? st.notes[i] : 0;
+    if (!view[i] && !st.revealed && nm) {
+      const box = document.createElement('div'); box.className = 'nt';
+      for (let d = 1; d <= 9; d++) { const s = document.createElement('i'); s.textContent = nm & (1 << (d - 1)) ? d : ''; box.appendChild(s); }
+      cells[i].appendChild(box);
+    }
   }
   setBtn($('btnReveal'), st.revealed ? 'eyeoff' : 'eye', st.revealed ? '隱藏答案' : '顯示答案');
 }
@@ -958,9 +977,35 @@ function fillSel(n) {
   if (st.revealed) { smsg('現在是顯示答案的狀態，按「隱藏答案」就能繼續作答。', 'err'); return; }
   if (i < 0) { smsg('請先點一格，再填數字。', 'err'); return; }
   if (p.givens[i]) { smsg('這是題目給的數字，不能改喔。', 'err'); return; }
+  if (ST.noteMode && n >= 1 && n <= 9) {
+    if (st.grid[i]) { smsg('這格已經填了數字，要寫草稿請先清除這格。', 'err'); return; }
+    st.notes[i] ^= 1 << (n - 1); renderSudoku(); return;
+  }
   st.grid[i] = n; st.wrong = st.wrong.filter(x => x !== i); st.hint = -1;
+  clearNotes(st, i, n);
   afterFill(st, p);
 }
+// 正式填入後：清掉該格草稿；勾選自動移除時，同列、同行、同宮的該數字草稿也移除
+function clearNotes(st, i, n) {
+  st.notes[i] = 0;
+  if (!ST.noteAuto || n < 1) return;
+  const r = Math.floor(i / 9), c = i % 9, b = Math.floor(r / 3) * 3 + Math.floor(c / 3), m = ~(1 << (n - 1));
+  for (let j = 0; j < 81; j++) {
+    const jr = Math.floor(j / 9), jc = j % 9;
+    if (jr === r || jc === c || Math.floor(jr / 3) * 3 + Math.floor(jc / 3) === b) st.notes[j] &= m;
+  }
+}
+function setNoteMode(on) {
+  ST.noteMode = !!on; const b = $('btnNote');
+  b.setAttribute('aria-pressed', String(ST.noteMode)); b.textContent = ST.noteMode ? '草稿：開' : '草稿：關';
+  $('numpad').classList.toggle('noting', ST.noteMode);
+}
+$('btnNote').onclick = () => {
+  setNoteMode(!ST.noteMode);
+  smsg(ST.noteMode ? '草稿模式：按數字會在格子裡寫小字，再按一次就擦掉。' : DEFMSG);
+};
+$('noteAuto').checked = false;
+$('noteAuto').onchange = e => { ST.noteAuto = e.target.checked; };
 board.addEventListener('click', e => {
   const c = e.target.closest('.c'); if (!c || !ST.sets.sudoku) return;
   ST.sel = Number(c.dataset.i); renderSudoku();
@@ -982,12 +1027,13 @@ $('btnHint').onclick = () => {
   const h = Engine.sudoku.hint(st.grid, p.solution, ST.sel);
   if (!h) { smsg('這題已經完成囉！'); return; }
   st.grid[h.index] = h.value; st.wrong = st.wrong.filter(x => x !== h.index); ST.sel = h.index;
+  clearNotes(st, h.index, h.value);
   afterFill(st, p); st.hint = h.index; renderSudoku();
 };
 $('btnRestart').onclick = () => {
   const p = sp(), st = ss();
-  if (st.grid.some((v, i) => v !== p.givens[i]) && !confirm('要把這題填的數字全部清掉，重新開始嗎？')) return;
-  st.grid = p.givens.slice(); st.wrong = []; st.revealed = false; st.done = false; st.hint = -1; ST.sel = -1;
+  if ((st.grid.some((v, i) => v !== p.givens[i]) || st.notes.some(v => v)) && !confirm('要把這題填的數字和草稿全部清掉，重新開始嗎？')) return;
+  st.grid = p.givens.slice(); st.notes.fill(0); st.wrong = []; st.revealed = false; st.done = false; st.hint = -1; ST.sel = -1;
   renderSudoku(); smsg('已經重來，加油！');
 };
 $('btnReveal').onclick = () => { const st = ss(); st.revealed = !st.revealed; st.hint = -1; renderSudoku(); smsg(st.revealed ? '綠色是答案。再按一次可以繼續作答。' : DEFMSG); };
@@ -1099,7 +1145,8 @@ document.addEventListener('keydown', e => {
   if (e.target.closest && e.target.closest('input,select,textarea')) return;
   const k = e.key;
   if (ST.type === 'sudoku') {
-    if (/^[0-9]$/.test(k)) { fillSel(Number(k)); e.preventDefault(); }
+    if (k === 'n' || k === 'N') { $('btnNote').click(); e.preventDefault(); }
+    else if (/^[0-9]$/.test(k)) { fillSel(Number(k)); e.preventDefault(); }
     else if (k === 'Backspace' || k === 'Delete') { fillSel(0); e.preventDefault(); }
     else if (k.startsWith('Arrow')) {
       e.preventDefault(); let i = ST.sel < 0 ? 40 : ST.sel, r = Math.floor(i / 9), c = i % 9;
