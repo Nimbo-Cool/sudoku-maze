@@ -135,7 +135,7 @@ window.Engine = (() => {
   function generateSudoku(settings = {}) {
     const { count, seed, rng } = options(settings);
     const level = settings.level === undefined ? 'easy' : settings.level;
-    if (!Object.hasOwn(LEVELS, level)) throw new Error('數獨難度必須是 easy、medium 或 hard。');
+    if (typeof level !== 'string' || !Object.hasOwn(LEVELS, level)) throw new Error('數獨難度必須是 easy、medium 或 hard。');
     const range = LEVELS[level], puzzles = [];
     for (let no = 1; no <= count; no++) {
       const target = range.min + Math.floor(rng() * (range.max - range.min + 1));
@@ -284,7 +284,7 @@ window.Engine = (() => {
   function generateMaze(settings = {}) {
     const { count, seed, rng } = options(settings);
     const level = settings.level === undefined ? 'easy' : settings.level;
-    if (!Object.hasOwn(MAZE_LEVELS, level)) throw new Error('迷宮難度必須是 easy、medium 或 hard。');
+    if (typeof level !== 'string' || !Object.hasOwn(MAZE_LEVELS, level)) throw new Error('迷宮難度必須是 easy、medium 或 hard。');
     const L = MAZE_LEVELS[level];
     let size = settings.size === undefined || settings.size === 'grow' ? 'auto' : settings.size;
     if (size !== 'auto' && !SIZES.includes(size)) throw new Error('迷宮大小必須是 5、6、7、8、10、12、15 或 auto。');
@@ -339,7 +339,7 @@ window.Engine = (() => {
       const errors = [], fail = message => errors.push(`第 ${i + 1} 題：${message}`);
       if (!entry || entry.no !== i + 1) fail('題號不正確');
       if (set.type === 'sudoku') {
-        const range = Object.hasOwn(LEVELS, set.level) ? LEVELS[set.level] : null;
+        const range = typeof set.level === 'string' && Object.hasOwn(LEVELS, set.level) ? LEVELS[set.level] : null;
         if (!entry || !validGrid(entry.solution) || entry.solution.includes(0) || countSolutions(entry.solution) !== 1) fail('答案不合法');
         if (!entry || !validGrid(entry.givens)) fail('題目格式不正確');
         else {
@@ -356,7 +356,7 @@ window.Engine = (() => {
         if (!Array.isArray(path) || !path.length || !same(path[0], entry.start) || !same(path[path.length - 1], entry.end) ||
             path.some(p => !coordinate(entry, p)) || path.some((p, j) => j > 0 && !canMove(entry, path[j - 1], p))) fail('答案路線不合法或穿牆');
         if (!lenient) {
-          const L = MAZE_LEVELS[set.level], st = mazeStats(entry);
+          const L = typeof set.level === 'string' && Object.hasOwn(MAZE_LEVELS, set.level) ? MAZE_LEVELS[set.level] : null, st = mazeStats(entry);
           if (!isPerfect(entry)) fail('迷宮有繞圈或有走不到的格子');
           if (!L) fail('迷宮難度不正確');
           else if (set.size === 'auto' && (!st || !L.pass(st, entry.rows))) fail('沒有達到難度指標');
@@ -391,13 +391,13 @@ window.Engine = (() => {
       if (!Array.isArray(list) || list.length < 1 || list.length > 60) throw new Error('題組檔裡的題目數量不正確（需要 1～60 題）。');
       if (typeof raw.seed !== 'string' && typeof raw.seed !== 'number') throw new Error('題組檔裡的題組代碼不正確。');
       if (data.type === 'sudoku') {
-        if (!Object.hasOwn(LEVELS, raw.level)) throw new Error('題組檔裡的難度不認得。');
+        if (typeof raw.level !== 'string' || !Object.hasOwn(LEVELS, raw.level)) throw new Error('題組檔裡的難度不認得。');
         set = { type: 'sudoku', version: gen, level: raw.level, seed: String(raw.seed).slice(0, 64), puzzles: list.map((p, i) => {
           if (!p || !validGrid(p.givens) || !validGrid(p.solution)) throw new Error(`第 ${i + 1} 題的盤面格式不正確。`);
           return { no: i + 1, givens: Array.from(p.givens), solution: Array.from(p.solution), clues: p.givens.filter(Boolean).length };
         }) };
       } else {
-        if (!Object.hasOwn(MAZE_LEVELS, raw.level)) throw new Error('題組檔裡的難度不認得。');
+        if (typeof raw.level !== 'string' || !Object.hasOwn(MAZE_LEVELS, raw.level)) throw new Error('題組檔裡的難度不認得。');
         const size = raw.size === 'auto' || raw.size === 'grow' ? 'auto' : SIZES.includes(raw.size) ? raw.size : 'auto';
         set = { type: 'maze', version: gen, level: raw.level, size, seed: String(raw.seed).slice(0, 64), mazes: list.map((m, i) => {
           if (!mazeShape(m)) throw new Error(`第 ${i + 1} 題的迷宮格式不正確。`);
@@ -743,6 +743,7 @@ function setStatus(text, kind) {
 function setBusy(b) {
   ST.busy = b;
   for (const id of ['btnNew', 'btnSeed', 'btnGuideNew', 'btnSave', 'btnLoad', 'btnPng', 'size', 'count', 'seed']) $(id).disabled = b;
+  $('btnSave').disabled = $('btnPng').disabled = b || !ST.sets[ST.type];
   $('levelTabs').querySelectorAll('button').forEach(x => { x.disabled = b; });
 }
 function showLevel(level) { ST.lv[ST.type] = level; setActive($('levelTabs'), 'level', level); }
@@ -817,7 +818,7 @@ function download(blob, name) {
   a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
-function fileTag(set) { return `${set.type === 'sudoku' ? '數獨' : '迷宮'}${LEVEL_NAME[set.level]}_${String(set.seed).replace(/[^0-9A-Z]/g, '_')}`; }
+function fileTag(set) { return `${set.type === 'sudoku' ? '數獨' : '迷宮'}${LEVEL_NAME[set.level]}_${String(set.seed).replace(/[^0-9A-Za-z]/g, '_')}`; }
 $('btnSave').onclick = () => {
   const set = ST.sets[ST.type];
   if (!set) { setStatus('還沒有題目可以存，請先按「出題」。', 'err'); return; }
@@ -940,7 +941,12 @@ function renderSudoku() {
 }
 function afterFill(st, p) {
   const res = Engine.sudoku.check(st.grid, p.solution);
-  if (res.solved) { if (!st.done) { st.done = true; renderSudoku(); smsg('全部填對了，太厲害了！', 'ok'); celebrate('太棒了！完成囉！'); return; } }
+  if (res.solved) {
+    const firstDone = !st.done;
+    st.done = true; renderSudoku(); smsg('全部填對了，太厲害了！', 'ok');
+    if (firstDone) celebrate('太棒了！完成囉！');
+    return;
+  }
   else st.done = false;
   const conf = Engine.sudoku.conflicts(st.grid);
   renderSudoku();
@@ -1231,7 +1237,7 @@ $('btnPng').onclick = async () => {
       const data = await svgToPng(itemSVG(set, it, ans ? (set.type === 'sudoku' ? 70 : 84) : 172, ans), 1800, 50);
       files.push({ name: `${ans ? '答案' : '題目'}_第${pad(it.no)}題.png`, data });
     }
-    download(zipStore(files), `${set.type === 'sudoku' ? '數獨' : '迷宮'}${LEVEL_NAME[set.level]}_PNG_${String(set.seed).replace(/[^0-9A-Z]/g, '_')}.zip`);
+    download(zipStore(files), `${set.type === 'sudoku' ? '數獨' : '迷宮'}${LEVEL_NAME[set.level]}_PNG_${String(set.seed).replace(/[^0-9A-Za-z]/g, '_')}.zip`);
     setStatus(`已匯出 ${files.length} 張 PNG（題目、答案各 ${items.length} 張），打包在一個 zip 檔裡。`, 'ok');
   } catch (e) { setStatus('PNG 匯出失敗：' + (e && e.message ? e.message : e), 'err'); }
   finally { setBusy(false); }
