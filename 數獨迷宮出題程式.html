@@ -722,7 +722,7 @@ body[data-view=q] #aPages,body[data-view=a] #qPages{display:none}
 (() => {
 'use strict';
 const $ = id => document.getElementById(id);
-const ST = { type: 'sudoku', mode: 'screen', view: 'q', busy: false, sel: -1, lv: { sudoku: 'easy', maze: 'easy' },
+const ST = { seeds: { sudoku: '', maze: '' }, type: 'sudoku', mode: 'screen', view: 'q', busy: false, sel: -1, lv: { sudoku: 'easy', maze: 'easy' },
   sets: { sudoku: null, maze: null }, idx: { sudoku: 0, maze: 0 }, play: { sudoku: [], maze: [] } };
 const INK = '#2b3a55';
 const f2 = v => +v.toFixed(2);
@@ -803,6 +803,7 @@ $('seed').addEventListener('input', e => {
   if (e.isComposing) return;
   const el = e.target, a = el.selectionStart, b = el.selectionEnd, up = el.value.toUpperCase();
   if (up !== el.value) { el.value = up; try { el.setSelectionRange(a, b); } catch (_) {} }
+  ST.seeds[ST.type] = el.value;
 });
 $('levelTabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || ST.busy || b.dataset.level === ST.lv[ST.type]) return;
@@ -851,6 +852,7 @@ function setActive(box, attr, val) { box.querySelectorAll('button').forEach(b =>
 $('typeTabs').addEventListener('click', e => {
   const b = e.target.closest('button'); if (!b || ST.busy || b.dataset.type === ST.type) return;
   ST.type = b.dataset.type; ST.sel = -1; document.body.dataset.type = ST.type; setActive($('typeTabs'), 'type', ST.type);
+  $('seed').value = ST.seeds[ST.type];
   if (ST.sets[ST.type]) reflectSettings(); else { showLevel(ST.lv[ST.type]); setStatus('還沒有出題。選好難度和題數，按「出題」開始。'); }
   renderAll();
 });
@@ -863,7 +865,7 @@ $('viewTabs').addEventListener('click', e => { const b = e.target.closest('butto
 function setView(v) { ST.view = v; document.body.dataset.view = v; setActive($('viewTabs'), 'view', v); }
 function reflectSettings(fresh) {
   const set = ST.sets[ST.type]; if (!set) return;
-  $('seed').value = set.seed; $('count').value = (set.puzzles || set.mazes).length;
+  ST.seeds[set.type] = String(set.seed); $('seed').value = ST.seeds[set.type]; $('count').value = (set.puzzles || set.mazes).length;
   showLevel(set.level);
   if (set.type === 'maze') $('size').value = String(set.size);
   setStatus(describe(set) + `　題組代碼 ${set.seed}`, 'ok');
